@@ -6,7 +6,6 @@ using TMPro;
 
 public class ArduinoManager : MonoBehaviour
 {
-
     [Header("Configuración")]
     public string puerto = "COM3";
     public int baudRate = 9600;
@@ -17,10 +16,11 @@ public class ArduinoManager : MonoBehaviour
     [Header("UI")]
     public TMP_Text[] textoCajas;
     public TMP_Text textoMensaje;
+    public TMP_Text textoConexion;
     public GameObject panelIncorrecto;
-    public GameObject panelConexion;      // panel con el input del puerto
-    public TMP_InputField inputPuerto;    // campo donde escribe el puerto
-    public UnityEngine.UI.Button botonConectar; // botón para conectar
+    public GameObject panelConexion;
+    public TMP_InputField inputPuerto;
+    public UnityEngine.UI.Button botonConectar;
 
     private SerialPort serial;
     private Thread hilo;
@@ -28,12 +28,15 @@ public class ArduinoManager : MonoBehaviour
     private bool hayDatos = false;
     private readonly object lockObj = new object();
 
+    private string mensajePendiente = "";
+    private bool conexionExitosa = false;
+    private bool hayMensajePendiente = false;
+
     void Start()
     {
         if (panelIncorrecto != null)
             panelIncorrecto.SetActive(false);
 
-        // Mostrar panel de conexión al inicio
         if (panelConexion != null)
             panelConexion.SetActive(true);
 
@@ -49,32 +52,35 @@ public class ArduinoManager : MonoBehaviour
         if (inputPuerto != null && inputPuerto.text != "")
             puerto = inputPuerto.text.Trim();
 
-        serial = new SerialPort(puerto, baudRate);
-        serial.ReadTimeout = 100;
+        if (textoConexion != null)
+            textoConexion.text = "Conectando...";
 
-        try
+        Thread hiloConexion = new Thread(() =>
         {
-            serial.Open();
-            hilo = new Thread(LeerSerial);
-            hilo.IsBackground = true;
-            hilo.Start();
+            try
+            {
+                SerialPort temp = new SerialPort(puerto, baudRate);
+                temp.ReadTimeout = 100;
+                temp.Open();
 
-            Debug.Log("Arduino conectado en " + puerto);
+                serial = temp;
+                hilo = new Thread(LeerSerial);
+                hilo.IsBackground = true;
+                hilo.Start();
 
-            if (textoMensaje != null)
-                textoMensaje.text = "Conectando...";
-
-            // Ocultar panel de conexión
-            if (panelConexion != null)
-                panelConexion.SetActive(false);
-
-        }
-        catch
-        {
-            Debug.LogError("No se pudo conectar en " + puerto);
-            if (textoMensaje != null)
-                textoMensaje.text = "Error: puerto " + puerto + " no encontrado";
-        }
+                mensajePendiente = "¡Conectado!";
+                conexionExitosa = true;
+                hayMensajePendiente = true;
+            }
+            catch
+            {
+                mensajePendiente = "Error: puerto " + puerto + " no encontrado. Si nada esta conectado, cierra el juego, conecta e intenta de nuevo.";
+                conexionExitosa = false;
+                hayMensajePendiente = true;
+            }
+        });
+        hiloConexion.IsBackground = true;
+        hiloConexion.Start();
     }
 
     void LeerSerial()
@@ -100,6 +106,17 @@ public class ArduinoManager : MonoBehaviour
 
     void Update()
     {
+        if (hayMensajePendiente)
+        {
+            hayMensajePendiente = false;
+
+            if (textoConexion != null)
+                textoConexion.text = mensajePendiente;
+
+            if (conexionExitosa && panelConexion != null)
+                panelConexion.SetActive(false);
+        }
+
         if (hayDatos)
         {
             string linea;
@@ -124,15 +141,24 @@ public class ArduinoManager : MonoBehaviour
     void ActualizarUI(EstadoJuego estado)
     {
         bool huboIncorrecto = estado.mensaje.StartsWith("Esperaba");
+        bool huboCorrecto = estado.mensaje == "Correcto!";
 
         if (huboIncorrecto)
         {
             StartCoroutine(MostrarPanelIncorrecto());
+            if (UIManager.Instance != null)
+                UIManager.Instance.ReproducirIncorrecto();
         }
         else
         {
             if (panelIncorrecto != null)
                 panelIncorrecto.SetActive(false);
+        }
+
+        if (huboCorrecto)
+        {
+            if (UIManager.Instance != null)
+                UIManager.Instance.ReproducirCorrecto();
         }
 
         for (int i = 0; i < estado.cajas.Length && i < textoCajas.Length; i++)
@@ -182,6 +208,12 @@ public class ArduinoManager : MonoBehaviour
             yield return new WaitForSeconds(2f);
             panelIncorrecto.SetActive(false);
         }
+    }
+
+    public void CerrarConexion()
+    {
+        if (hilo != null) hilo.Abort();
+        if (serial != null && serial.IsOpen) serial.Close();
     }
 
     void OnApplicationQuit()
